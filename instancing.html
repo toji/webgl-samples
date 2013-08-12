@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+
+<!--
+Copyright (c) 2013 Brandon Jones
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+    1. The origin of this software must not be misrepresented; you must not
+    claim that you wrote the original software. If you use this software
+    in a product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+
+    2. Altered source versions must be plainly marked as such, and must not
+    be misrepresented as being the original software.
+
+    3. This notice may not be removed or altered from any source
+    distribution.
+-->
+
+<html>
+    <head>
+        <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+
+        <title>Instancing with ANGLE_instanced_arrays</title>
+        <link href="css/common.css" rel="stylesheet" type="text/css" />
+
+        <script src="js/util/require.js"></script>
+        <script>
+            require.config({
+                baseUrl: "js"
+            });
+
+            require([
+                "util/gl-context-helper",
+                "util/camera",
+                "light",
+                "util/mesh-utils",
+                "util/gl-util",
+                "util/gl-matrix-min",
+                "js/util/game-shim.js",
+                "js/util/Stats.js"
+            ], function(GLContextHelper, Camera, Light, MeshUtils, GLUtil) {
+                "use strict";
+
+                // Shader
+                var defaultVS = [
+                    Light.DirectionalLight.vertexFunction,
+
+                    "attribute vec3 position;",
+                    "attribute vec3 normal;",
+
+                    "uniform vec3 offset;",
+                    "uniform vec3 color;",
+                    
+                    "uniform mat4 viewMat;",
+                    "uniform mat4 modelMat;",
+                    "uniform mat4 projectionMat;",
+
+                    "varying vec3 vNormal;",
+                    "varying vec4 vColor;",
+
+                    "void main(void) {",
+                    "   vec4 worldPosition =  modelMat * vec4(position, 1.0);",
+                    "   worldPosition += vec4(offset, 0.0);",
+                    "   mat3 normalMat = mat3(modelMat);",
+                    "   vNormal = normal * normalMat;",
+                    "   vColor = vec4(color, 1.0);",
+                    "   setupLight(worldPosition.xyz);",
+                    "   gl_Position = projectionMat * viewMat * worldPosition;",
+                    "}"
+                ].join("\n");
+
+                var instancedVS = [
+                    Light.DirectionalLight.vertexFunction,
+
+                    "attribute vec3 position;",
+                    "attribute vec3 normal;",
+                    "attribute vec3 offset;",
+                    "attribute vec3 color;",
+                    
+                    "uniform mat4 viewMat;",
+                    "uniform mat4 modelMat;",
+                    "uniform mat4 projectionMat;",
+
+                    "varying vec3 vNormal;",
+                    "varying vec4 vColor;",
+
+                    "void main(void) {",
+                    "   vec4 worldPosition =  modelMat * vec4(position, 1.0);",
+                    "   worldPosition += vec4(offset, 0.0);",
+                    "   mat3 normalMat = mat3(modelMat);",
+                    "   vNormal = normal * normalMat;",
+                    "   vColor = vec4(color, 1.0);",
+                    "   setupLight(worldPosition.xyz);",
+                    "   gl_Position = projectionMat * viewMat * worldPosition;",
+                    "}"
+                ].join("\n");
+
+                var defaultFS = [
+                    "precision mediump float;",
+
+                    Light.DirectionalLight.fragmentFunction,
+
+                    "uniform vec3 ambient;",
+                    "varying vec3 vNormal;",
+                    "varying vec4 vColor;",
+
+                    "void main(void) {",
+                    "   vec3 lightValue = computeLight(vNormal, 0.5);",
+                    "   vec4 diffuseColor = vColor;",
+                    "   vec3 finalColor = diffuseColor.rgb * ambient;",
+                    "   finalColor += diffuseColor.rgb * lightValue;",
+                    "   gl_FragColor = vec4(finalColor, diffuseColor.a);",
+                    "}"
+                ].join("\n");
+
+                var Renderer = function (gl, canvas) {
+                    this.canvas = canvas;
+
+                    this.camera = new Camera.OrbitCamera(canvas);
+                    this.camera.maxDistance = 50;
+                    this.camera.minDistance = 15;
+                    this.camera.distanceStep = 0.01;
+                    this.camera.setDistance(20);
+                    this.camera.setCenter([0, 0, 0]);
+                    this.camera.setYUp(false);
+
+                    this.light = new Light.DirectionalLight();
+                    this.light.direction[0] = -0.2;
+                    this.light.direction[1] = -0.2;
+                    this.light.direction[2] = 1.0;
+                    
+                    this.projectionMat = mat4.create();
+
+                    gl.clearColor(0.0, 0.0, 0.0, 1.0);
+                    gl.clearDepth(1.0);
+                    gl.enable(gl.DEPTH_TEST);
+                    gl.enable(gl.CULL_FACE);
+                    gl.cullFace(gl.BACK);
+
+                    this.defaultShader = GLUtil.createProgram(gl, defaultVS, defaultFS);
+                    this.instancedShader = GLUtil.createProgram(gl, instancedVS, defaultFS);
+
+                    this._buildMonkey(gl);
+                    this._buildInstances(gl, 10);
+
+                    this.useHardwareInstancing = false;
+
+                    this.instanceExt = GLUtil.getExtension(gl, "ANGLE_instanced_arrays");
+                    if(!this.instanceExt) {
+                        var customControls = document.getElementById("customControls");
+                        customControls.classList.add("error");
+                        customControls.innerHTML = "ANGLE_instanced_arrays not supported by this browser";
+                        this.instanceCheck = null;
+                    } else {
+                        this.instanceCheck = document.getElementById("hardwareInstancing");
+                    }
+                };
+
+                Renderer.prototype.resize = function (gl, canvas) {
+                    gl.viewport(0, 0, canvas.width, canvas.height);
+                    mat4.perspective(45, canvas.width/canvas.height, 1.0, 1024.0, this.projectionMat);
+                };
+
+                var modelMat = mat4.identity();
+
+                Renderer.prototype.draw = function (gl, timing) {
+                    var canvas = this.canvas;
+                    this.camera.update(timing.frameTime);
+
+                    this.useHardwareInstancing = this.instanceCheck && this.instanceCheck.checked;
+
+                    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+                    if (this.monkeyIndexCount) {
+                        var shader = this.useHardwareInstancing ? this.instancedShader : this.defaultShader;
+                        gl.useProgram(shader.program);
+
+                        gl.uniform3f(shader.uniform.ambient, 0.1, 0.1, 0.1);
+                        gl.uniformMatrix4fv(shader.uniform.viewMat, false, this.camera.getViewMat());
+                        gl.uniformMatrix4fv(shader.uniform.modelMat, false, modelMat);
+                        gl.uniformMatrix4fv(shader.uniform.projectionMat, false, this.projectionMat);
+
+                        this.light.bindUniforms(gl, shader.uniform, 1);
+
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.monkeyIndexBuffer);
+
+                        gl.bindBuffer(gl.ARRAY_BUFFER, this.monkeyVertexBuffer);
+                        gl.enableVertexAttribArray(shader.attribute.position);
+                        gl.vertexAttribPointer(shader.attribute.position, 3, gl.FLOAT, false, 12, 0);
+
+                        gl.bindBuffer(gl.ARRAY_BUFFER, this.monkeyNormalBuffer);
+                        gl.enableVertexAttribArray(shader.attribute.normal);
+                        gl.vertexAttribPointer(shader.attribute.normal, 3, gl.FLOAT, false, 12, 0);
+
+                        if(this.useHardwareInstancing && this.instanceExt) {
+                            gl.bindBuffer(gl.ARRAY_BUFFER, this.monkeyOffsetBuffer);
+                            gl.enableVertexAttribArray(shader.attribute.offset);
+                            gl.vertexAttribPointer(shader.attribute.offset, 3, gl.FLOAT, false, 12, 0);
+                            this.instanceExt.vertexAttribDivisorANGLE(shader.attribute.offset, 1);
+
+                            gl.bindBuffer(gl.ARRAY_BUFFER, this.monkeyColorBuffer);
+                            gl.enableVertexAttribArray(shader.attribute.color);
+                            gl.vertexAttribPointer(shader.attribute.color, 3, gl.FLOAT, false, 12, 0);
+                            this.instanceExt.vertexAttribDivisorANGLE(shader.attribute.color, 1);
+
+                            this.instanceExt.drawElementsInstancedANGLE(gl.TRIANGLES, this.monkeyIndexCount, gl.UNSIGNED_SHORT, 0, this.monkeyInstanceCount);
+
+                            this.instanceExt.vertexAttribDivisorANGLE(shader.attribute.offset, 0);
+                            this.instanceExt.vertexAttribDivisorANGLE(shader.attribute.color, 0);
+                        } else {
+                            var x, y, z;
+                            var r, g, b;
+                            for(var i = 0; i < this.monkeyInstanceCount; ++i) {
+                                x = this.monkeyOffsets[i*3];
+                                y = this.monkeyOffsets[i*3+1];
+                                z = this.monkeyOffsets[i*3+2];
+
+                                r = this.monkeyColors[i*3];
+                                g = this.monkeyColors[i*3+1];
+                                b = this.monkeyColors[i*3+2];
+
+                                gl.uniform3f(shader.uniform.offset, x, y, z);
+                                gl.uniform3f(shader.uniform.color, r, g, b);
+                                gl.drawElements(gl.TRIANGLES, this.monkeyIndexCount, gl.UNSIGNED_SHORT, 0);
+                            }
+                        }
+                    }
+                };
+
+                Renderer.prototype._buildMonkey = function(gl) {
+                    this.monkeyVertexBuffer = null;
+                    this.monkeyNormalBuffer = null;
+                    this.monkeyIndexBuffer = null;
+
+                    this.monkeyIndexCount = 0;
+
+                    var self = this;
+                    var jsonXhr = new XMLHttpRequest();
+                    jsonXhr.open('GET', "root/models/suzanne.json", true);
+                    jsonXhr.onload = function() {
+                        var data = JSON.parse(this.responseText);
+
+                        var positionData = new Float32Array(data.buffer);
+                        var indexData = new Uint16Array(data.indices);
+                        var normalData = MeshUtils.generateNormals(positionData, 3, 0, positionData.length/3, indexData);
+
+                        self.monkeyIndexCount = indexData.length;
+                        
+                        self.monkeyVertexBuffer = gl.createBuffer();
+                        gl.bindBuffer(gl.ARRAY_BUFFER, self.monkeyVertexBuffer);
+                        gl.bufferData(gl.ARRAY_BUFFER, positionData, gl.STATIC_DRAW);
+
+                        self.monkeyNormalBuffer = gl.createBuffer();
+                        gl.bindBuffer(gl.ARRAY_BUFFER, self.monkeyNormalBuffer);
+                        gl.bufferData(gl.ARRAY_BUFFER, normalData, gl.STATIC_DRAW);
+
+                        self.monkeyIndexBuffer = gl.createBuffer();
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.monkeyIndexBuffer);
+                        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
+                    };
+                    jsonXhr.send(null);
+                };
+
+                Renderer.prototype._buildInstances = function(gl, monkeyCubeSize) {
+                    var monkeySize = 3.0;
+                    var hmcs = monkeyCubeSize / 2.0;
+
+                    this.monkeyInstanceCount = monkeyCubeSize * monkeyCubeSize * monkeyCubeSize;
+
+                    var offsetData = new Float32Array(this.monkeyInstanceCount * 3);
+                    var colorData = new Float32Array(this.monkeyInstanceCount * 3);
+                    
+                    var i = 0;
+                    for(var z = 0; z < monkeyCubeSize; ++z) {
+                        for(var y = 0; y < monkeyCubeSize; ++y) {
+                            for(var x = 0; x < monkeyCubeSize; ++x) {
+                                offsetData[i] = (x-hmcs) * monkeySize;
+                                offsetData[i+1] = (y-hmcs) * monkeySize;
+                                offsetData[i+2] = (z-hmcs) * monkeySize;
+
+                                colorData[i] = x / monkeyCubeSize;
+                                colorData[i+1] = y / monkeyCubeSize;
+                                colorData[i+2] = z / monkeyCubeSize;
+
+                                i += 3;
+                            }
+                        }
+                    }
+
+                    this.monkeyOffsetBuffer = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.monkeyOffsetBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, offsetData, gl.STATIC_DRAW);
+
+                    this.monkeyColorBuffer = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.monkeyColorBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, colorData, gl.STATIC_DRAW);
+
+                    this.monkeyOffsets = offsetData;
+                    this.monkeyColors = colorData;
+                };
+
+                // Setup the canvas and GL context, initialize the scene 
+                var canvas = document.getElementById("webgl-canvas");
+                var contextHelper = new GLContextHelper(canvas, document.getElementById("content-frame"));
+                var renderer = new Renderer(contextHelper.gl, canvas);
+
+                var fullscreenBtn = document.getElementById("fullscreen");
+                if(contextHelper.fullscreenSupported) {
+                    fullscreenBtn.addEventListener("click", function() {
+                        contextHelper.toggleFullscreen();
+                    });
+                } else {
+                    fullscreenBtn.parentElement.removeChild(fullscreenBtn);
+                }
+
+                var stats = new Stats();
+                document.getElementById("controls-container").appendChild(stats.domElement);
+                
+                // Get the render loop going
+                contextHelper.start(renderer, stats);
+            });
+        </script>
+    </head>
+    <body>
+        <div id="page-header" class="content-column">
+            <h1>Instancing with ANGLE_instanced_arrays</h1>
+        </div>
+        <div id="content-frame">
+            <div id="canvas-container">
+                <canvas id="webgl-canvas"></canvas>
+            </div>
+            <div id="controls-container" class="content-column">
+                <span id="customControls">
+                    <input type="checkbox" id="hardwareInstancing" checked>Use Hardware Instancing</input>
+                </span>
+                <button id="fullscreen">Fullscreen</button>
+            </div>
+        </div>
+    </body>
+</html>
