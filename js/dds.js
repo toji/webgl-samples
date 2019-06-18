@@ -184,8 +184,8 @@
             byteArray = new Uint8Array(arrayBuffer, dataOffset, dataLength);
             gl.compressedTexImage2D(gl.TEXTURE_2D, i, internalFormat, width, height, 0, byteArray);
             dataOffset += dataLength;
-            width *= 0.5;
-            height *= 0.5;
+            width = Math.max(1, width >> 1);
+            height = Math.max(1, height >> 1);
         }
 
         return mipmapCount;
