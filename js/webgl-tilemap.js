@@ -33,9 +33,11 @@ define([
 
     // Shader
     var tilemapVS = [
+        "precision mediump float;",
+
         "attribute vec2 position;",
         "attribute vec2 texture;",
-        
+
         "varying vec2 pixelCoord;",
         "varying vec2 texCoord;",
 
@@ -67,7 +69,7 @@ define([
         "void main(void) {",
         "   vec4 tile = texture2D(tiles, texCoord);",
         "   if(tile.x == 1.0 && tile.y == 1.0) { discard; }",
-        "   vec2 spriteOffset = floor(tile.xy * 256.0) * tileSize;",
+        "   vec2 spriteOffset = floor(tile.xy * 255.0) * tileSize;",
         "   vec2 spriteCoord = mod(pixelCoord, tileSize);",
         "   gl_FragColor = texture2D(sprites, (spriteOffset + spriteCoord) * inverseSpriteTextureSize);",
         //"   gl_FragColor = tile;",

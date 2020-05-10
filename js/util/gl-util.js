@@ -46,9 +46,9 @@ define([
         "precision mediump float;",
 
         "uniform sampler2D diffuse;",
-        
+
         "varying vec2 texCoord;",
-        
+
         "void main(void) {",
         "   vec4 color = texture2D(diffuse, texCoord);",
         "   gl_FragColor = vec4(color.rgb, color.a);",
@@ -155,22 +155,22 @@ define([
 
         getContext: function(canvas, options) {
             var context;
-        
+
             if (canvas.getContext) {
                 try {
                     context = canvas.getContext('webgl', options);
                     if(context) { return context; }
                 } catch(ex) {}
-            
+
                 try {
                     context = canvas.getContext('experimental-webgl', options);
                     if(context) { return context; }
                 } catch(ex) {}
             }
-        
+
             return null;
         },
-    
+
         showGLFailed: function(element) {
             var errorHTML = "Either your browser does not support WebGL, or it may be disabled.<br/>";
             errorHTML += "Please visit <a href=\"http://get.webgl.org\">http://get.webgl.org</a> for ";
@@ -186,7 +186,7 @@ define([
             errorElement.id = "gl-error";
             element.parentNode.replaceChild(errorElement, element);
         },
-    
+
         createProgram: function(gl, vertexShaderSource, fragmentShaderSource) {
             var shaderProgram = gl.createProgram(),
                 vs = this.compileShader(gl, vertexShaderSource, gl.VERTEX_SHADER),
@@ -197,7 +197,7 @@ define([
             gl.linkProgram(shaderProgram);
 
             if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
-                console.error("Shader program failed to link");
+                console.error("Shader program failed to link: "  + gl.getProgramInfoLog(shaderProgram));
                 gl.deleteProgram(shaderProgram);
                 gl.deleteShader(vs);
                 gl.deleteShader(fs);
@@ -239,7 +239,7 @@ define([
             }
             return null;
         },
-    
+
         createSolidTexture: function(gl, color) {
             var data = new Uint8Array(color);
             var texture = gl.createTexture();
@@ -292,12 +292,12 @@ define([
             gl.useProgram(quadShader.program);
 
             gl.bindBuffer(gl.ARRAY_BUFFER, quadVertBuffer);
-            
+
             gl.enableVertexAttribArray(quadShader.attribute.position);
             gl.enableVertexAttribArray(quadShader.attribute.texture);
             gl.vertexAttribPointer(quadShader.attribute.position, 2, gl.FLOAT, false, 16, 0);
             gl.vertexAttribPointer(quadShader.attribute.texture, 2, gl.FLOAT, false, 16, 8);
-            
+
             gl.activeTexture(gl.TEXTURE0);
             gl.uniform1i(quadShader.uniform.diffuse, 0);
             gl.bindTexture(gl.TEXTURE_2D, texture);
